@@ -1,8 +1,8 @@
 from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
-from apps.hotel.models import Room
-from apps.hotel.serializer import RegisterSerializer, HotelsSerializer, RoomSerializer
+from apps.hotel.models import CustomUser, Room
+from apps.hotel.serializer import RegisterSerializer, HotelsSerializer, RoomDetailSerializer, RoomSerializer, RoomsBookingsSerializer
 
 
 @api_view(["GET", "POST"])
@@ -52,7 +52,36 @@ def rooms_id_view(request, pk):
             return Response(serializer.data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+    return None
 
-@api_view(["GET", "POST"])
-def rooms_bookings_view(request,pk):
-    pass
+
+
+@api_view(["GET", "POST", "PATCH"])
+def rooms_bookings_view(request, pk):
+    try:
+        room = Room.objects.get(id=pk)
+    except Room.DoesNotExist:
+        return Response({"errors": "Room not found"}, status=status.HTTP_400_BAD_REQUEST)
+    
+    user = request.user if request.user.is_authenticated else CustomUser.objects.first()
+    
+    serializer = RoomsBookingsSerializer(
+        data=request.data,
+        context={"user": user, "room": room}
+    )
+    if serializer.is_valid():
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+    
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(["GET"])
+def room_detail_view(request, pk):
+    try:
+        room = Room.objects.get(pk=pk)
+    except Room.DoesNotExist:
+        return Response({"error": "Room not found"}, status=404)
+
+    serializer = RoomDetailSerializer(room)
+    return Response(serializer.data)

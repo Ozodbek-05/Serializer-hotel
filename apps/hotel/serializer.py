@@ -1,7 +1,10 @@
+from datetime import date
+from decimal import Decimal
 from django.contrib.auth import get_user_model
 from django.db.models import Avg
+from apps.hotel.models import Booking, Hotel, Amenity, RoomType, Room
 from rest_framework import serializers
-from apps.hotel.models import Hotel, Amenity, RoomType, Room
+from .models import RoomReview
 
 User = get_user_model()
 
@@ -242,7 +245,229 @@ class RoomsBookingsSerializer(serializers.Serializer):
             "username":value.user.username
         }
 
-    def get_room(self,value):
+    @staticmethod
+    def get_room(value):
         return {
-            
+            "id":value.room.id,
+            "room_number": value.room.room_number,
+            "hotel_name": value.room.hotel.name
         }
+
+    @staticmethod
+    def get_nights_count(value):
+        return (value.check_out - value.check_in).days
+    
+    @staticmethod
+    def check_in_date(value):
+        if value < date.today():
+            raise serializers.ValidationError("Check-in date must not be before today")
+        return value
+    
+    def validate_check_out(self, value):
+        check_in = self.initial_data.get("check_in")
+        if check_in and str(value) < check_in:
+            raise serializers.ValidationError("Check-out date must be after check-in date")
+        return value
+    
+    def validate_guesta_count(self,value):
+        room = serializers.context.get("room")
+        if room and value > room.capacity:
+            raise serializers.ValidationError("Guests count exceeds room capacity")
+        return value
+    
+    def validate(self, attrs):
+        room = self.context.get("room")
+        check_in = attrs.get("check_in")
+        check_out = attrs.get("check_out")
+        
+        if room and check_in and check_out:
+            overlap = Booking.objects.filter(
+                room=room,
+                status__in=["pending", "confirmed"],
+                check_in__lt=check_out,
+                check_out__gt=check_in
+            ) 
+            
+            if overlap.exists(): 
+                raise serializers.ValidationError("The room is not available for the selected dates")
+            
+        return attrs
+
+        
+    def create(self, validated_data):
+        room = self.context.get("room")
+        user = self.context.get("user")
+
+        nights = (validated_data["check_out"] - validated_data["check_in"]).days
+        discount = Decimal(room.discount_percentage) / Decimal("100")
+        total_price = room.price_per_night * nights * (Decimal("1") - discount)
+
+        booking = Booking.objects.create(
+            user=user,
+            room=room,
+            total_price=total_price,
+            **validated_data
+        )
+        return booking
+    
+
+
+class HotelSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    name = serializers.CharField()
+    description = serializers.CharField()
+    address = serializers.CharField()
+    city = serializers.CharField()
+    country = serializers.CharField()
+    star_rating = serializers.IntegerField()
+    phone = serializers.CharField()
+    email = serializers.EmailField()
+    rooms_count = serializers.SerializerMethodField()
+
+    def get_rooms_count(self, obj):
+        return obj.rooms.count()
+
+
+class RoomTypeSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    name = serializers.CharField()
+    description = serializers.CharField()
+
+
+class AmenitySerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    name = serializers.CharField()
+    icon = serializers.CharField()
+
+
+class ReviewSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    cleanliness_rating = serializers.IntegerField()
+    comfort_rating = serializers.IntegerField()
+    service_rating = serializers.IntegerField()
+    overall_rating = serializers.IntegerField()
+    comment = serializers.CharField()
+    created_at = serializers.DateTimeField()
+    average_rating = serializers.SerializerMethodField()
+    user = serializers.SerializerMethodField()
+
+    def get_user(self, obj):
+        return {
+            "id": obj.user.id,
+            "username": obj.user.username
+        }
+
+    def get_average_rating(self, obj):
+        ratings = [
+            obj.cleanliness_rating,
+            obj.comfort_rating,
+            obj.service_rating,
+            obj.overall_rating
+        ]
+        return round(sum(ratings) / 4, 2)
+
+
+class RoomDetailSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    hotel = HotelSerializer()
+    room_number = serializers.CharField()
+    room_type = RoomTypeSerializer()
+    amenities = AmenitySerializer(many=True)
+    price_per_night = serializers.DecimalField(max_digits=10, decimal_places=2)
+    discount_percentage = serializers.IntegerField()
+    capacity = serializers.IntegerField()
+    floor = serializers.IntegerField()
+    status = serializers.CharField()
+    description = serializers.CharField()
+    reviews = ReviewSerializer(many=True)
+    reviews_count = serializers.SerializerMethodField()
+    average_cleanliness = serializers.SerializerMethodField()
+    average_comfort = serializers.SerializerMethodField()
+    average_service = serializers.SerializerMethodField()
+    overall_average_rating = serializers.SerializerMethodField()
+
+    def get_reviews_count(self, obj):
+        return obj.reviews.count()
+
+    def get_average_cleanliness(self, obj):
+        reviews = obj.reviews.all()
+        if not reviews:
+            return 0
+        return round(sum(r.cleanliness_rating for r in reviews) / len(reviews), 2)
+
+    def get_average_comfort(self, obj):
+        reviews = obj.reviews.all()
+        if not reviews:
+            return 0
+        return round(sum(r.comfort_rating for r in reviews) / len(reviews), 2)
+
+    def get_average_service(self, obj):
+        reviews = obj.reviews.all()
+        if not reviews:
+            return 0
+        return round(sum(r.service_rating for r in reviews) / len(reviews), 2)
+
+    def get_overall_average_rating(self, obj):
+        reviews = obj.reviews.all()
+        if not reviews:
+            return 0
+        return round(sum(r.overall_rating for r in reviews) / len(reviews), 2)
+
+
+class ReviewCreateSerializer(serializers.Serializer):
+    cleanliness_rating = serializers.IntegerField()
+    comfort_rating = serializers.IntegerField()
+    service_rating = serializers.IntegerField()
+    overall_rating = serializers.IntegerField()
+    comment = serializers.CharField()
+
+
+    def validate(self, attrs):
+        user = self.context.get("user")
+        room = self.context.get("room")
+
+        if not user or not room:
+            raise serializers.ValidationError("User or room not found in context")
+
+        if RoomReview.objects.filter(user=user, room=room).exists():
+            raise serializers.ValidationError("You have already left a review for this room")
+
+        if len(attrs.get("comment", "")) < 10:
+            raise serializers.ValidationError("Comment must be at least 10 characters long")
+
+        return attrs
+
+    def create(self, validated_data):
+        user = self.context.get("user")
+        room = self.context.get("room")
+        review = RoomReview.objects.create(user=user, room=room, **validated_data)
+        return review
+    
+
+    def to_internal_value(self, data):
+        data = super().to_internal_value(data)
+        if "comment" in data and isinstance(data["comment"], str):
+            data["comment"] = data["comment"].strip()
+        return data
+
+    def validate_cleanliness_rating(self, value):
+        if not (1 <= value <= 5):
+            raise serializers.ValidationError("Cleanliness rating must be between 1 and 5")
+        return value
+
+    def validate_comfort_rating(self, value):
+        if not (1 <= value <= 5):
+            raise serializers.ValidationError("Comfort rating must be between 1 and 5")
+        return value
+
+    def validate_service_rating(self, value):
+        if not (1 <= value <= 5):
+            raise serializers.ValidationError("Service rating must be between 1 and 5")
+        return value
+
+    def validate_overall_rating(self, value):
+        if not (1 <= value <= 5):
+            raise serializers.ValidationError("Overall rating must be between 1 and 5")
+        return value
+
+    
