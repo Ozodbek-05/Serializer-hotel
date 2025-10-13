@@ -1,6 +1,5 @@
-from rest_framework import serializers
 from django.utils.text import slugify
-
+from rest_framework import serializers
 from apps.blogs.models import BlogProfile, Category
 from apps.hotel.models import CustomUser
 
@@ -111,3 +110,75 @@ class CategorySerializer(serializers.Serializer):
         elif not value[0].isupper():
             raise serializers.ValidationError("Name must start with an uppercase letter.")
         return value
+
+
+class AuthorSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    username = serializers.CharField()
+    full_name = serializers.SerializerMethodField()
+
+    @staticmethod
+    def get_full_name(obj):
+        return f"{obj.first_name} {obj.last_name}"
+
+
+class TagSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    name = serializers.CharField()
+    slug = serializers.CharField()
+
+
+class PostSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    title = serializers.CharField()
+    slug = serializers.CharField()
+    author = AuthorSerializer()
+    category = CategorySerializer()
+    tags = TagSerializer(many=True)
+    excerpt = serializers.CharField()
+    featured_image = serializers.CharField(allow_null=True)
+    status = serializers.CharField()
+    status_display = serializers.SerializerMethodField()
+    view_count = serializers.IntegerField()
+    likes_count = serializers.SerializerMethodField()
+    comments_count = serializers.SerializerMethodField()
+    reading_time = serializers.SerializerMethodField()
+    published_date = serializers.DateTimeField()
+    is_liked_by_user = serializers.SerializerMethodField()
+    is_bookmarked_by_user = serializers.SerializerMethodField()
+
+    @staticmethod
+    def get_status_display(obj):
+        return obj.get_status_display()
+
+    @staticmethod
+    def get_likes_count(obj):
+        return obj.likes.count()
+
+    @staticmethod
+    def get_comments_count(obj):
+        return obj.comments.count()
+    @staticmethod
+    def get_reading_time(obj):
+        words = len(obj.content.split())
+        minutes = max(1, words // 200)
+        return f"{minutes} min"
+
+    def get_is_liked_by_user(self, obj):
+        user = self.context.get('request').user
+        if user.is_anonymous:
+            return False
+        return obj.likes.filter(user=user).exists()
+
+    def get_is_bookmarked_by_user(self, obj):
+        user = self.context.get('request').user
+        if user.is_anonymous:
+            return False
+        return obj.bookmarked_in.filter(user=user).exists()
+
+    def to_representation(self, instance):
+        rep = super().to_representation(instance)
+        user = self.context.get('request').user
+        if instance.status == 'draft' and instance.author != user:
+            return None
+        return rep
