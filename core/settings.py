@@ -41,6 +41,8 @@ INSTALLED_APPS = [
     'rest_framework',
 
     'apps.hotel',
+    'apps.blogs',
+
 ]
 
 MIDDLEWARE = [
