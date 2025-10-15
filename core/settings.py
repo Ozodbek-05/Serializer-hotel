@@ -42,6 +42,7 @@ INSTALLED_APPS = [
 
     'apps.hotel',
     'apps.blogs',
+    'apps.feedback',
 
 ]
 
